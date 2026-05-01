@@ -1,10 +1,12 @@
-#!/bin/bash
+#!/bin/sh
 # =============================================================================
 # setup.sh — One-time host setup for homelab-backups
 #
 # Run this on each host before deploying the Backrest Portainer stack.
 # Installs git (if needed), rclone, and configures the Google Drive remote
 # using a service account key.
+#
+# Compatible with Alpine (apk) and Debian/Ubuntu (apt-get).
 #
 # Usage:
 #   Clone this repo on the host and run the script. You can either:
@@ -21,7 +23,7 @@
 #   The script will re-run itself with sudo if not already root.
 # =============================================================================
 
-set -euo pipefail
+set -eu
 
 # ── Colors ────────────────────────────────────────────────────────────────────
 RED='\033[0;31m'
@@ -29,89 +31,101 @@ GREEN='\033[0;32m'
 YELLOW='\033[1;33m'
 NC='\033[0m'
 
-info()    { echo -e "${GREEN}[✓]${NC} $*"; }
-warn()    { echo -e "${YELLOW}[!]${NC} $*"; }
-error()   { echo -e "${RED}[✗]${NC} $*" >&2; exit 1; }
-section() { echo -e "\n${YELLOW}── $* ──${NC}"; }
+info()    { printf "${GREEN}[✓]${NC} %s\n" "$*"; }
+warn()    { printf "${YELLOW}[!]${NC} %s\n" "$*"; }
+error()   { printf "${RED}[✗]${NC} %s\n" "$*" >&2; exit 1; }
+section() { printf "\n${YELLOW}── %s ──${NC}\n" "$*"; }
 
 # ── Re-exec with sudo if not root ─────────────────────────────────────────────
-if [[ $EUID -ne 0 ]]; then
+if [ "$(id -u)" -ne 0 ]; then
   echo "This script requires root. Re-running with sudo..."
-  exec sudo bash "$0" "$@"
+  exec sudo sh "$0" "$@"
 fi
 
 # ── Detect OS package manager ─────────────────────────────────────────────────
-if command -v apt-get &>/dev/null; then
-  PKG_INSTALL="apt-get install -y"
-  PKG_UPDATE="apt-get update -qq"
-elif command -v apk &>/dev/null; then
-  PKG_INSTALL="apk add --no-cache"
-  PKG_UPDATE="apk update -q"
+if command -v apt-get >/dev/null 2>&1; then
+  DISTRO="debian"
+elif command -v apk >/dev/null 2>&1; then
+  DISTRO="alpine"
 else
-  PKG_INSTALL=""
-  PKG_UPDATE=""
+  DISTRO="unknown"
 fi
 
-# ── Ensure git is installed ───────────────────────────────────────────────────
+pkg_install() {
+  case "$DISTRO" in
+    debian)
+      apt-get update -qq
+      apt-get install -y "$1"
+      ;;
+    alpine)
+      apk update -q
+      apk add --no-cache "$1"
+      ;;
+    *)
+      error "$1 is not installed and no supported package manager found. Install it manually and re-run."
+      ;;
+  esac
+}
+
+# ── Install rclone ────────────────────────────────────────────────────────────
+# Alpine's BusyBox unzip doesn't support rclone's install script — use apk instead.
+install_rclone() {
+  case "$DISTRO" in
+    alpine)
+      apk update -q
+      apk add --no-cache rclone
+      ;;
+    *)
+      curl -fsSL https://rclone.org/install.sh | sh
+      ;;
+  esac
+}
+
+# ── Ensure dependencies are installed ─────────────────────────────────────────
 section "Checking dependencies"
-if command -v git &>/dev/null; then
-  info "git already installed: $(git --version)"
-else
-  if [[ -z "$PKG_INSTALL" ]]; then
-    error "git is not installed and no supported package manager found. Install git manually and re-run."
-  fi
-  warn "git not found — installing..."
-  $PKG_UPDATE
-  $PKG_INSTALL git
-  info "git installed: $(git --version)"
-fi
 
-# ── Ensure python3 is installed (used for JSON validation) ───────────────────
-if ! command -v python3 &>/dev/null; then
-  if [[ -z "$PKG_INSTALL" ]]; then
-    error "python3 is not installed and no supported package manager found. Install python3 manually and re-run."
-  fi
-  warn "python3 not found — installing..."
-  $PKG_UPDATE
-  $PKG_INSTALL python3
-  info "python3 installed"
-fi
+command -v git >/dev/null 2>&1     || pkg_install git
+info "git: $(git --version)"
+
+command -v python3 >/dev/null 2>&1 || pkg_install python3
+info "python3: $(python3 --version)"
+
+command -v curl >/dev/null 2>&1    || pkg_install curl
+info "curl ready"
 
 # ── Get service account key — from file arg or interactive paste ──────────────
 SA_KEY_SRC="${1:-}"
 SA_KEY_CONTENT=""
 
-if [[ -n "$SA_KEY_SRC" ]]; then
-  # File path provided as argument
-  if [[ ! -f "$SA_KEY_SRC" ]]; then
+if [ -n "$SA_KEY_SRC" ]; then
+  if [ ! -f "$SA_KEY_SRC" ]; then
     error "Service account key not found: $SA_KEY_SRC"
   fi
   SA_KEY_CONTENT=$(cat "$SA_KEY_SRC")
 else
-  # No file provided — prompt for paste
-  echo ""
+  printf "\n"
   warn "No key file provided."
-  echo ""
-  echo "  Paste your Google Cloud service account JSON key below."
-  echo "  (Copy the entire contents of the .json key file)"
-  echo "  When done, press Enter then Ctrl+D on a new line."
-  echo ""
+  printf "\n"
+  printf "  Paste your Google Cloud service account JSON key below.\n"
+  printf "  (Copy the entire contents of the .json key file)\n"
+  printf "  When done, press Enter then Ctrl+D on a new line.\n"
+  printf "\n"
   SA_KEY_CONTENT=$(cat)
-  echo ""
+  printf "\n"
 fi
 
 # Validate it looks like a service account JSON
-if ! echo "$SA_KEY_CONTENT" | python3 -c "import sys,json; d=json.load(sys.stdin); assert d.get('type')=='service_account'" 2>/dev/null; then
+if ! printf '%s' "$SA_KEY_CONTENT" | python3 -c "import sys,json; d=json.load(sys.stdin); assert d.get('type')=='service_account'" 2>/dev/null; then
   error "That doesn't look like a valid service account JSON key. Check the contents and try again."
 fi
 info "Service account key validated"
 
 # ── Install rclone ────────────────────────────────────────────────────────────
 section "Installing rclone"
-if command -v rclone &>/dev/null; then
+if command -v rclone >/dev/null 2>&1; then
   info "rclone already installed: $(rclone --version | head -1)"
 else
-  curl -fsSL https://rclone.org/install.sh | bash
+  install_rclone
   info "rclone installed: $(rclone --version | head -1)"
 fi
 
@@ -123,13 +137,13 @@ info "Config directory ready: $RCLONE_DIR"
 
 # ── Write service account key ─────────────────────────────────────────────────
 SA_KEY_DEST="$RCLONE_DIR/sa-key.json"
-echo "$SA_KEY_CONTENT" > "$SA_KEY_DEST"
+printf '%s\n' "$SA_KEY_CONTENT" > "$SA_KEY_DEST"
 chmod 600 "$SA_KEY_DEST"
 info "Service account key written to: $SA_KEY_DEST"
 
 # ── Write rclone.conf ─────────────────────────────────────────────────────────
 RCLONE_CONF="$RCLONE_DIR/rclone.conf"
-if [[ -f "$RCLONE_CONF" ]]; then
+if [ -f "$RCLONE_CONF" ]; then
   warn "rclone.conf already exists — skipping (delete it manually to regenerate)"
 else
   cat > "$RCLONE_CONF" <<EOF
@@ -144,10 +158,9 @@ fi
 
 # ── Verify rclone can reach Google Drive ──────────────────────────────────────
 section "Verifying Google Drive connection"
-if rclone lsd gdrive: &>/dev/null; then
+if rclone lsd gdrive: >/dev/null 2>&1; then
   info "Google Drive connection successful"
-  echo ""
-  echo "  Contents of gdrive:/"
+  printf "\n  Contents of gdrive:/\n"
   rclone lsd gdrive: | sed 's/^/    /'
 else
   warn "Could not connect to Google Drive."
@@ -157,15 +170,15 @@ fi
 
 # ── Done ──────────────────────────────────────────────────────────────────────
 section "Done"
-echo ""
-echo "  Host is ready for Backrest deployment."
-echo ""
-echo "  Next steps:"
-echo "    1. In Portainer, go to Stacks → Add stack"
-echo "    2. Choose 'Repository' as the build method"
-echo "    3. Set repository URL to your homelab-backups GitHub repo"
-echo "    4. Set compose path to: docker-compose.yml"
-echo "    5. Deploy the stack"
-echo ""
-echo "  Backrest UI will be available at: http://$(hostname -I | awk '{print $1}'):9898"
-echo ""
+printf "\n"
+printf "  Host is ready for Backrest deployment.\n"
+printf "\n"
+printf "  Next steps:\n"
+printf "    1. In Portainer, go to Stacks -> Add stack\n"
+printf "    2. Choose 'Repository' as the build method\n"
+printf "    3. Set repository URL to your homelab-backups GitHub repo\n"
+printf "    4. Set compose path to: docker-compose.yml\n"
+printf "    5. Deploy the stack\n"
+printf "\n"
+printf "  Backrest UI will be available at: http://%s:9898\n" "$(hostname -I 2>/dev/null | awk '{print $1}' || hostname)"
+printf "\n"
