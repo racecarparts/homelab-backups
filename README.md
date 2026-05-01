@@ -50,13 +50,13 @@ Clone this repo on the host and run `setup.sh`. It installs rclone, places the s
 ```bash
 git clone https://github.com/YOUR_USERNAME/homelab-backups.git
 cd homelab-backups
-sudo ./setup.sh
+./setup.sh
 ```
 
 The script will prompt you to paste the contents of your service account JSON key directly in the terminal — no `scp` required. Alternatively, if you've already copied the key file to the host, you can pass it as an argument:
 
 ```bash
-sudo ./setup.sh ~/sa-key.json
+./setup.sh ~/sa-key.json
 ```
 
 At the end of the script, it will confirm the Google Drive connection and print the next steps.
@@ -123,7 +123,7 @@ Add one plan per volume you want to back up:
 
 ## Adding a new host
 
-1. Clone this repo on the new host and run `sudo ./setup.sh`
+1. Clone this repo on the new host and run `./setup.sh`
 2. Deploy the Portainer stack pointing at this repo
 3. In the Backrest UI, add a repository with the GDrive path set to `gdrive:backups/{newhostname}` to keep it isolated from other hosts
 4. No changes needed to this repo
