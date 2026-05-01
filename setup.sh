@@ -3,8 +3,8 @@
 # setup.sh — One-time host setup for homelab-backups
 #
 # Run this on each host before deploying the Backrest Portainer stack.
-# Installs rclone and configures the Google Drive remote using a service
-# account key. The key file must be copied to this host before running.
+# Installs git (if needed), rclone, and configures the Google Drive remote
+# using a service account key.
 #
 # Usage:
 #   Clone this repo on the host and run the script. You can either:
@@ -12,14 +12,13 @@
 #   Option A — paste the key interactively (no scp needed):
 #        git clone https://github.com/YOUR_USERNAME/homelab-backups.git
 #        cd homelab-backups
-#        sudo ./setup.sh
+#        ./setup.sh
 #     (the script will prompt you to paste the JSON key)
 #
 #   Option B — provide the key as a file:
-#        scp homelab-backups-key.json user@{host-ip}:~/sa-key.json
-#        git clone https://github.com/YOUR_USERNAME/homelab-backups.git
-#        cd homelab-backups
-#        sudo ./setup.sh ~/sa-key.json
+#        ./setup.sh ~/sa-key.json
+#
+#   The script will re-run itself with sudo if not already root.
 # =============================================================================
 
 set -euo pipefail
@@ -35,9 +34,47 @@ warn()    { echo -e "${YELLOW}[!]${NC} $*"; }
 error()   { echo -e "${RED}[✗]${NC} $*" >&2; exit 1; }
 section() { echo -e "\n${YELLOW}── $* ──${NC}"; }
 
-# ── Must run as root ──────────────────────────────────────────────────────────
+# ── Re-exec with sudo if not root ─────────────────────────────────────────────
 if [[ $EUID -ne 0 ]]; then
-  error "Run this script with sudo: sudo ./setup.sh [path/to/sa-key.json]"
+  echo "This script requires root. Re-running with sudo..."
+  exec sudo bash "$0" "$@"
+fi
+
+# ── Detect OS package manager ─────────────────────────────────────────────────
+if command -v apt-get &>/dev/null; then
+  PKG_INSTALL="apt-get install -y"
+  PKG_UPDATE="apt-get update -qq"
+elif command -v apk &>/dev/null; then
+  PKG_INSTALL="apk add --no-cache"
+  PKG_UPDATE="apk update -q"
+else
+  PKG_INSTALL=""
+  PKG_UPDATE=""
+fi
+
+# ── Ensure git is installed ───────────────────────────────────────────────────
+section "Checking dependencies"
+if command -v git &>/dev/null; then
+  info "git already installed: $(git --version)"
+else
+  if [[ -z "$PKG_INSTALL" ]]; then
+    error "git is not installed and no supported package manager found. Install git manually and re-run."
+  fi
+  warn "git not found — installing..."
+  $PKG_UPDATE
+  $PKG_INSTALL git
+  info "git installed: $(git --version)"
+fi
+
+# ── Ensure python3 is installed (used for JSON validation) ───────────────────
+if ! command -v python3 &>/dev/null; then
+  if [[ -z "$PKG_INSTALL" ]]; then
+    error "python3 is not installed and no supported package manager found. Install python3 manually and re-run."
+  fi
+  warn "python3 not found — installing..."
+  $PKG_UPDATE
+  $PKG_INSTALL python3
+  info "python3 installed"
 fi
 
 # ── Get service account key — from file arg or interactive paste ──────────────
@@ -67,6 +104,7 @@ fi
 if ! echo "$SA_KEY_CONTENT" | python3 -c "import sys,json; d=json.load(sys.stdin); assert d.get('type')=='service_account'" 2>/dev/null; then
   error "That doesn't look like a valid service account JSON key. Check the contents and try again."
 fi
+info "Service account key validated"
 
 # ── Install rclone ────────────────────────────────────────────────────────────
 section "Installing rclone"
@@ -77,17 +115,17 @@ else
   info "rclone installed: $(rclone --version | head -1)"
 fi
 
-# ── Create rclone config directory ───────────────────────────────────────────
+# ── Create rclone config directory ────────────────────────────────────────────
 section "Configuring rclone"
 RCLONE_DIR="/root/.config/rclone"
 mkdir -p "$RCLONE_DIR"
 info "Config directory ready: $RCLONE_DIR"
 
-# ── Copy service account key ──────────────────────────────────────────────────
+# ── Write service account key ─────────────────────────────────────────────────
 SA_KEY_DEST="$RCLONE_DIR/sa-key.json"
-cp "$SA_KEY_SRC" "$SA_KEY_DEST"
+echo "$SA_KEY_CONTENT" > "$SA_KEY_DEST"
 chmod 600 "$SA_KEY_DEST"
-info "Service account key copied to: $SA_KEY_DEST"
+info "Service account key written to: $SA_KEY_DEST"
 
 # ── Write rclone.conf ─────────────────────────────────────────────────────────
 RCLONE_CONF="$RCLONE_DIR/rclone.conf"
@@ -104,7 +142,7 @@ EOF
   info "rclone.conf written: $RCLONE_CONF"
 fi
 
-# ── Verify rclone can reach Google Drive ─────────────────────────────────────
+# ── Verify rclone can reach Google Drive ──────────────────────────────────────
 section "Verifying Google Drive connection"
 if rclone lsd gdrive: &>/dev/null; then
   info "Google Drive connection successful"
