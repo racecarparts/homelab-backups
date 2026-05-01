@@ -1,0 +1,20 @@
+services:
+  backrest:
+    image: ghcr.io/garethgeorge/backrest:latest
+    container_name: backrest
+    volumes:
+      - ./data:/data                                      # backrest database & restic binary
+      - ./config:/config                                  # backrest config (plans, repos)
+      - ./cache:/cache                                    # restic cache (speeds up operations)
+      - ./tmp:/tmp
+      - /root/.config/rclone:/root/.config/rclone:ro     # rclone config (set up on host first)
+      - /var/lib/docker/volumes:/docker-volumes:ro        # access to all docker volumes on this host
+    environment:
+      - BACKREST_DATA=/data
+      - BACKREST_CONFIG=/config/config.json
+      - XDG_CACHE_HOME=/cache
+      - TMPDIR=/tmp
+      - TZ=UTC
+    ports:
+      - "9898:9898"
+    restart: unless-stopped

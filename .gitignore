@@ -1,0 +1,10 @@
+# Never commit real rclone credentials or service account keys
+rclone/rclone.conf
+rclone/sa-key.json
+*.json
+
+# Backrest runtime data (lives on each host, not in the repo)
+data/
+config/
+cache/
+tmp/

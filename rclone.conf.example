@@ -1,0 +1,16 @@
+# rclone.conf.example
+# Copy this to /root/.config/rclone/rclone.conf on each host.
+# Uses a Google Cloud service account key — no OAuth required.
+#
+# Setup:
+#   1. Create a service account in Google Cloud Console
+#   2. Download its JSON key file
+#   3. Copy the key to /root/.config/rclone/sa-key.json on the host
+#   4. Share your Google Drive "backups" folder with the service account email
+#
+# Never commit the real rclone.conf or sa-key.json to this repo.
+
+[gdrive]
+type = drive
+scope = drive
+service_account_file = /root/.config/rclone/sa-key.json
